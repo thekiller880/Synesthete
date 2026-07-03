@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>E8 Synthesis Engine · 3D WebGL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cinzel+Decorative:wght@700&display=swap" rel="stylesheet">
+<!--
+  E8 SYNTHESIS ENGINE · 3D WEBGL REBUILD
+  ————————————————————————————————————————
+  Upgrades over the 2D version:
+  · Three.js r128 WebGL renderer — real 3D, orbit with mouse/touch/pinch
+  · Projector8D: three orthonormal vectors in ℝ⁸ animated via Givens
+    rotations (genuine SO(8) group elements). Sliders now rotate the
+    3D window through 8-dimensional space — each position is a
+    genuinely different cross-section of the E8 root polytope.
+  · 240 root spheres via InstancedMesh: gold (112 integer) + ember (128
+    half-integer), each updating position from the live 8D projection.
+  · 6720 edge lines (Three.js LineSegments) connecting roots with
+    inner product −1 — the adjacency graph of the E8 root system.
+  · Weyl reflection gesture: double-click / double-tap a root sphere →
+    applies the Weyl group element w_r: v → v − 2(v·r̂)r̂ to the
+    projection frame. |W(E8)| = 696,729,600.
+  · All math verified in Node.js before deploy (see e8-synthesis-engine.html).
+-->
+<style>
+:root {
+  --void:#0a0604; --ember:#ff6b35; --ember2:#b8390e;
+  --gold:#d4a017; --cream:#f2e6d8;
+  --panel:rgba(17,10,6,0.96); --border:rgba(255,140,66,0.26); --glow:rgba(255,107,53,0.20);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;overflow:hidden;background:var(--void);touch-action:none;-webkit-tap-highlight-color:transparent;}
+#container{position:fixed;inset:0;z-index:0;}
+
+/* loading */
+#loading{position:fixed;inset:0;background:var(--void);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:200;gap:14px;}
+#loading h2{font-family:'Cinzel',serif;color:var(--ember);font-size:13px;letter-spacing:4px;text-transform:uppercase;}
+#loading p{font-family:'Courier New',monospace;color:var(--gold);font-size:10px;letter-spacing:2px;opacity:.7;}
+.load-bar{width:200px;height:2px;background:rgba(255,107,53,.2);border-radius:2px;}
+.load-fill{height:100%;background:var(--ember);border-radius:2px;animation:fill 1.4s ease-in forwards;}
+@keyframes fill{from{width:0}to{width:100%}}
+
+/* title */
+.title-block{position:fixed;top:16px;left:50%;transform:translateX(-50%);text-align:center;pointer-events:none;z-index:5;}
+.title-block h1{font-family:'Cinzel Decorative','Cinzel',serif;font-size:13px;letter-spacing:4px;color:var(--ember);text-shadow:0 0 22px var(--glow);font-weight:700;}
+.title-block p{font-family:'Cinzel',serif;font-size:8.5px;letter-spacing:2.5px;color:var(--gold);opacity:.65;margin-top:4px;text-transform:uppercase;}
+
+/* toggle */
+.toggle-menu{position:fixed;top:16px;left:16px;z-index:10;background:linear-gradient(135deg,var(--ember),var(--ember2));border:none;border-radius:50%;width:44px;height:44px;color:#1a0a04;font-size:17px;cursor:pointer;box-shadow:0 4px 16px var(--glow);transition:transform .3s ease;}
+.toggle-menu:hover{transform:scale(1.08) rotate(90deg);}
+
+/* controls panel */
+.controls{position:fixed;top:16px;left:72px;z-index:9;background:var(--panel);backdrop-filter:blur(22px);padding:18px;border-radius:14px;border:1px solid var(--border);width:284px;max-height:87vh;overflow-y:auto;transition:transform .4s cubic-bezier(.4,0,.2,1),opacity .4s;box-shadow:0 8px 40px rgba(0,0,0,.65);}
+.controls.hidden{transform:translateX(-400px);opacity:0;pointer-events:none;}
+.controls::-webkit-scrollbar{width:4px;}.controls::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+.controls h2{font-family:'Cinzel',serif;font-size:14px;letter-spacing:1.5px;color:var(--ember);text-transform:uppercase;margin-bottom:14px;}
+.sec{font-family:'Cinzel',serif;font-size:9px;letter-spacing:2px;color:var(--gold);text-transform:uppercase;margin:14px 0 8px;padding-top:11px;border-top:1px solid var(--border);opacity:.8;}
+.cg{margin-bottom:11px;}
+label{display:block;margin-bottom:4px;font-family:'Cinzel',serif;font-size:9px;letter-spacing:.6px;color:var(--gold);text-transform:uppercase;}
+select,input[type=range]{width:100%;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:6px;color:var(--cream);}
+select{padding:7px;font-size:12.5px;}
+input[type=range]{accent-color:var(--ember);height:23px;padding:0;}
+select:focus,input[type=range]:focus{outline:2px solid var(--ember);outline-offset:2px;}
+button{padding:9px;background:linear-gradient(135deg,var(--ember),var(--ember2));border:none;border-radius:6px;color:#1a0a04;font-weight:700;cursor:pointer;font-family:'Cinzel',serif;font-size:9px;letter-spacing:.5px;text-transform:uppercase;transition:transform .2s,box-shadow .2s;}
+button:hover{transform:translateY(-2px);box-shadow:0 5px 18px var(--glow);}
+button.ghost{background:rgba(255,255,255,.04);color:var(--cream);border:1px solid var(--border);}
+.bg{display:flex;gap:7px;margin-top:7px;}.bg button{flex:1;}
+.indicator{margin-top:11px;padding:8px;background:var(--glow);border-radius:6px;font-family:'Cinzel',serif;font-size:9px;text-align:center;border:1px solid var(--border);animation:pulse 2.3s infinite;color:var(--cream);letter-spacing:.5px;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+.algd{background:rgba(255,107,53,.06);padding:9px;border-radius:6px;font-family:'Courier New',monospace;font-size:9.5px;margin-top:8px;border:1px solid var(--border);line-height:1.75;color:var(--cream);}
+.audio-row{display:flex;gap:6px;margin-top:6px;}.audio-row button{flex:1;font-size:8.5px;padding:8px 2px;}
+.cbrow{display:flex;align-items:center;gap:7px;margin-top:9px;}.cbrow input{accent-color:var(--ember);width:13px;height:13px;}.cbrow label{margin:0;font-size:10px;}
+
+/* side panels */
+.side-panels{position:fixed;top:16px;right:14px;z-index:9;display:flex;flex-direction:column;gap:10px;}
+.stats{background:var(--panel);backdrop-filter:blur(16px);padding:12px 15px;border-radius:12px;font-size:10px;font-family:'Courier New',monospace;border:1px solid var(--border);}
+.stats div{display:flex;justify-content:space-between;gap:12px;padding:1.5px 0;}
+.lbl{color:rgba(242,230,216,.38);}.val{color:var(--ember);}
+.fano-panel{background:var(--panel);backdrop-filter:blur(16px);padding:8px;border-radius:12px;border:1px solid var(--border);text-align:center;}
+.fano-lbl{font-family:'Cinzel',serif;font-size:8px;letter-spacing:1.5px;color:var(--gold);text-transform:uppercase;margin-bottom:5px;}
+
+/* hint */
+.hint{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-family:'Cinzel',serif;font-size:8.5px;letter-spacing:2px;color:rgba(255,107,53,.4);pointer-events:none;z-index:5;text-transform:uppercase;white-space:nowrap;}
+
+/* mobile */
+@media(max-width:700px){
+  .toggle-menu{left:9px;top:11px;width:40px;height:40px;font-size:15px;}
+  .controls{left:9px;top:58px;width:calc(100vw - 18px);max-width:305px;}
+  .side-panels{top:11px;right:7px;gap:7px;}
+  .stats{min-width:122px;font-size:8.5px;padding:8px 10px;}
+  #fanoCanvas{width:70px;height:70px;}
+  .fano-lbl{font-size:6.5px;}
+  .title-block h1{font-size:10.5px;letter-spacing:2.5px;}
+  .title-block p{display:none;}
+  .hint{font-size:7.5px;bottom:12px;}
+}
+@media(prefers-reduced-motion:reduce){.indicator{animation:none;}.toggle-menu,button{transition:none;}}
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <h2>E8 Synthesis Engine</h2>
+  <p>Computing 240-root lattice · 6720 adjacencies…</p>
+  <div class="load-bar"><div class="load-fill"></div></div>
+</div>
+
+<div id="container"></div>
+
+<div class="title-block">
+  <h1>E8 SYNTHESIS ENGINE · 3D</h1>
+  <p>240 roots · Octonion · Fano · Weyl · 8D→3D WebGL</p>
+</div>
+
+<button class="toggle-menu" id="toggleMenu" aria-label="Toggle controls">☰</button>
+
+<div class="controls" id="controls">
+  <h2>Algebra Console</h2>
+
+  <div class="sec">System</div>
+  <div class="cg">
+    <label>Algebra Mode</label>
+    <select id="algebraMode">
+      <option value="quaternion">Quaternion (4D)</option>
+      <option value="octonion">Octonion · Fano (7D)</option>
+      <option value="e8" selected>E8 Lie Algebra (240)</option>
+      <option value="hybrid">Hybrid Algebra</option>
+    </select>
+  </div>
+  <div class="cg">
+    <label>Quantum Mode</label>
+    <select id="mode">
+      <option value="superposition">Superposition</option>
+      <option value="wave-particle">Wave-Particle</option>
+      <option value="entanglement">Entanglement</option>
+      <option value="tunneling">Tunneling</option>
+      <option value="interference">Interference</option>
+      <option value="spinor">Spinor Field</option>
+      <option value="kaprekar">Kaprekar (6174)</option>
+    </select>
+  </div>
+
+  <div class="sec">8D Frame · SO(8) Rotation</div>
+  <div class="cg">
+    <label>Phase Γ₀₁: <span id="phaseLabel">0.00</span></label>
+    <input type="range" id="algebraPhase" min="0" max="6.28" value="0" step="0.01">
+  </div>
+  <div class="cg">
+    <label>Γ₂₃ (i): <span id="qiLabel">0.00</span></label>
+    <input type="range" id="qi" min="-1" max="1" value="0" step="0.01">
+  </div>
+  <div class="cg">
+    <label>Γ₄₅ (j): <span id="qjLabel">0.00</span></label>
+    <input type="range" id="qj" min="-1" max="1" value="0" step="0.01">
+  </div>
+  <div class="cg">
+    <label>Γ₆₇ (k): <span id="qkLabel">0.00</span></label>
+    <input type="range" id="qk" min="-1" max="1" value="0" step="0.01">
+  </div>
+  <div class="cg">
+    <label>Cross-Plane Mix: <span id="nonAssocLabel">0.00</span></label>
+    <input type="range" id="nonAssoc" min="0" max="1" value="0" step="0.01">
+  </div>
+
+  <div class="sec">Particles</div>
+  <div class="cg">
+    <label>Count: <span id="particleCountLabel">600</span></label>
+    <input type="range" id="particleCount" min="100" max="2000" value="600" step="100">
+  </div>
+
+  <div class="bg">
+    <button id="collapse">Collapse</button>
+    <button id="reset" class="ghost">Reset</button>
+  </div>
+  <div class="bg">
+    <button id="autoRotate" class="ghost">Auto Rotate</button>
+    <button id="randomize" class="ghost">Randomize</button>
+  </div>
+
+  <div class="sec">Sacred Tone</div>
+  <div class="cg">
+    <label>Spatial Mode</label>
+    <select id="spatialMode">
+      <option value="stereo">Stereo</option>
+      <option value="binaural">Binaural (+6 Hz)</option>
+      <option value="hrtf">8D HRTF Orbit</option>
+    </select>
+  </div>
+  <div class="audio-row" style="flex-wrap:wrap;gap:5px;">
+    <button id="tone432" style="flex:1 1 42%;">432 Hz</button>
+    <button id="tone528" style="flex:1 1 42%;">528 Hz</button>
+    <button id="tone261" style="flex:1 1 42%;">261.63 Hz</button>
+    <button id="tone146" style="flex:1 1 42%;">146.83 Hz</button>
+  </div>
+  <button id="toneStop" class="ghost" style="width:100%;margin-top:6px;">Stop Tone</button>
+
+  <div class="indicator" id="indicator">E8 Lie Algebra · 240 Roots</div>
+  <div class="algd" id="algd">
+    240 roots · |r|² = 2 for all r<br>
+    112 integer + 128 half-integer<br>
+    6720 adjacent pairs · dp = −1<br>
+    DBL-CLICK root → Weyl reflection
+  </div>
+</div>
+
+<div class="side-panels">
+  <div class="stats">
+    <div><span class="lbl">FPS</span><span class="val" id="fps">60</span></div>
+    <div><span class="lbl">Particles</span><span class="val" id="statParticles">600</span></div>
+    <div><span class="lbl">Roots</span><span class="val" id="statRoots">240</span></div>
+    <div><span class="lbl">Edges</span><span class="val" id="statEdges">6720</span></div>
+    <div><span class="lbl">|q|</span><span class="val" id="statQNorm">1.000</span></div>
+    <div><span class="lbl">Assoc |Δ|</span><span class="val" id="statAssoc">0.000</span></div>
+    <div><span class="lbl">Weyl ops</span><span class="val" id="statWeyl">0</span></div>
+  </div>
+  <div class="fano-panel">
+    <div class="fano-lbl">Fano · e₁…e₇</div>
+    <canvas id="fanoCanvas" width="180" height="180"></canvas>
+  </div>
+</div>
+
+<div class="hint">DRAG · ORBIT &nbsp;|&nbsp; PINCH · ZOOM &nbsp;|&nbsp; DBL-CLICK ROOT · WEYL</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+'use strict';
+
+/* ================================================================
+   MATH CORE
+   All verified in Node.js — see comments in e8-synthesis-engine.html
+   ================================================================ */
+
+const PHI = (1 + Math.sqrt(5)) / 2;
+
+// 8D helpers
+function dot8(a,b){let s=0;for(let i=0;i<8;i++)s+=a[i]*b[i];return s;}
+function normalize8(v){const n=Math.sqrt(dot8(v,v));return n>1e-12?v.map(x=>x/n):v.slice();}
+function gramSchmidt8(v,basis){
+  let w=v.slice();
+  for(const b of basis){const d=dot8(w,b);w=w.map((x,i)=>x-d*b[i]);}
+  return normalize8(w);
+}
+
+// Quaternion
+class Quaternion{
+  constructor(w=1,x=0,y=0,z=0){this.w=w;this.x=x;this.y=y;this.z=z;}
+  multiply(q){return new Quaternion(
+    this.w*q.w-this.x*q.x-this.y*q.y-this.z*q.z,
+    this.w*q.x+this.x*q.w+this.y*q.z-this.z*q.y,
+    this.w*q.y-this.x*q.z+this.y*q.w+this.z*q.x,
+    this.w*q.z+this.x*q.y-this.y*q.x+this.z*q.w);}
+  conjugate(){return new Quaternion(this.w,-this.x,-this.y,-this.z);}
+  norm(){return Math.sqrt(this.w*this.w+this.x*this.x+this.y*this.y+this.z*this.z);}
+  normalize(){const n=this.norm();return n>0?new Quaternion(this.w/n,this.x/n,this.y/n,this.z/n):new Quaternion(1,0,0,0);}
+  rotatePoint(p){const q=new Quaternion(0,p[0],p[1],p[2]),r=this.multiply(q).multiply(this.conjugate());return[r.x,r.y,r.z];}
+}
+
+// Octonion via Fano plane — cyclic difference set {0,1,3} mod 7
+const OCT_MULT=(()=>{
+  const t=Array.from({length:7},()=>Array(7).fill(null));
+  for(let n=0;n<7;n++){
+    const a=n,b=(n+1)%7,c=(n+3)%7;
+    t[a][b]={sign:1,k:c};t[b][c]={sign:1,k:a};t[c][a]={sign:1,k:b};
+    t[b][a]={sign:-1,k:c};t[c][b]={sign:-1,k:a};t[a][c]={sign:-1,k:b};
+  }
+  return t;
+})();
+const FANO_LINES=Array.from({length:7},(_,n)=>[n,(n+1)%7,(n+3)%7]);
+
+class Octonion{
+  constructor(c){this.c=c?c.slice(0,8):[0,0,0,0,0,0,0,0];}
+  multiply(o){
+    const a=this.c,b=o.c,r=new Array(8).fill(0);
+    r[0]+=a[0]*b[0];
+    for(let i=1;i<=7;i++)r[i]+=a[0]*b[i]+a[i]*b[0];
+    for(let i=1;i<=7;i++)for(let j=1;j<=7;j++){
+      if(!a[i]||!b[j])continue;
+      if(i===j){r[0]-=a[i]*b[j];continue;}
+      const m=OCT_MULT[i-1][j-1];r[m.k+1]+=m.sign*a[i]*b[j];
+    }
+    return new Octonion(r);
+  }
+  sub(o){return new Octonion(this.c.map((v,i)=>v-o.c[i]));}
+  norm(){return Math.sqrt(this.c.reduce((s,v)=>s+v*v,0));}
+}
+function computeLiveAssociator(qi,qj,qk){
+  const A=new Octonion([0,1,qi,0,0,0,0,0]),B=new Octonion([0,0,1,qj,0,0,0,0]),C=new Octonion([0,qk,0,1,0,0,0,0]);
+  return A.multiply(B).multiply(C).sub(A.multiply(B.multiply(C))).norm();
+}
+
+// E8 lattice — 240 roots, |r|²=2 verified
+class E8Lattice{
+  constructor(){this.roots=this._gen();}
+  _gen(){
+    const r=[];
+    // 112 integer roots: (±1,±1,0⁶) permutations
+    for(let i=0;i<8;i++)for(let j=i+1;j<8;j++)for(const si of[-1,1])for(const sj of[-1,1]){
+      const v=new Array(8).fill(0);v[i]=si;v[j]=sj;r.push(v);
+    }
+    // 128 half-integer roots: (±½)⁸ with even # of minus signs
+    for(let mask=0;mask<256;mask++){
+      const v=[];let minus=0;
+      for(let i=0;i<8;i++){const s=(mask&(1<<i))?1:-1;v.push(s*.5);if(s<0)minus++;}
+      if(minus%2===0)r.push(v);
+    }
+    return r; // exactly 240
+  }
+}
+
+// 8D→3D projector — explores the Grassmannian Gr(3,8) via SO(8) Givens rotations
+class Projector8D{
+  constructor(){
+    const raw1=[1,PHI,1,PHI,0,0,0,0];
+    const raw2=[0,0,0,0,1,PHI,1,PHI];
+    const raw3=[PHI,-1,0,0,PHI,-1,0,0];
+    const v1=normalize8(raw1),v2=gramSchmidt8(raw2,[v1]),v3=gramSchmidt8(raw3,[v1,v2]);
+    this.baseFrame=[v1,v2,v3];
+    this.frame=[v1.slice(),v2.slice(),v3.slice()];
+    this._weylStart=null;this._weylProg=1;
+  }
+  _givens(f,i,j,th){
+    const c=Math.cos(th),s=Math.sin(th);
+    return f.map(v=>{const w=v.slice();w[i]=c*v[i]-s*v[j];w[j]=s*v[i]+c*v[j];return w;});
+  }
+  _ortho(f){
+    const v1=normalize8(f[0]),v2=gramSchmidt8(f[1],[v1]),v3=gramSchmidt8(f[2],[v1,v2]);
+    return[v1,v2,v3];
+  }
+  update(phase,qi,qj,qk,na,time){
+    let f=this.baseFrame.map(v=>v.slice());
+    // Pair-plane rotations in ℝ⁸ — each slider rotates a different SO(8) plane
+    f=this._givens(f,0,1,phase*.5);
+    f=this._givens(f,2,3,phase*.5+qi*Math.PI);
+    f=this._givens(f,4,5,phase*.3+qj*Math.PI);
+    f=this._givens(f,6,7,phase*.3+qk*Math.PI);
+    // Cross-pair mixing — controlled by non-associativity
+    if(na>.001){
+      f=this._givens(f,0,4,na*Math.PI*.5);f=this._givens(f,1,5,na*Math.PI*.5);
+      f=this._givens(f,2,6,na*Math.PI*.35);f=this._givens(f,3,7,na*Math.PI*.35);
+    }
+    // Slow ambient tumble through 8D
+    f=this._givens(f,0,2,time*.00041);f=this._givens(f,1,3,time*.00029);f=this._givens(f,4,6,time*.00023);
+    f=this._ortho(f);
+    // Weyl reflection animation (cosine easing)
+    if(this._weylProg<1&&this._weylStart){
+      this._weylProg=Math.min(1,this._weylProg+.035);
+      const t=.5-.5*Math.cos(this._weylProg*Math.PI);
+      this.frame=this._ortho(this._weylStart.map((sv,idx)=>sv.map((x,k)=>x*(1-t)+f[idx][k]*t)));
+    } else {
+      this.frame=f;
+    }
+  }
+  project(root,scale=162){
+    return[dot8(this.frame[0],root)*scale,dot8(this.frame[1],root)*scale,dot8(this.frame[2],root)*scale];
+  }
+  // Weyl reflection w_r: v → v − 2(v·r̂)r̂  — element of W(E8), |W(E8)|=696,729,600
+  weylReflect(root){
+    const ns=root.reduce((s,v)=>s+v*v,0);if(ns<1e-10)return;
+    const g=root.map(v=>v/Math.sqrt(ns));
+    this._weylStart=this.frame.map(v=>v.slice());
+    this.baseFrame=this._ortho(this.baseFrame.map(v=>{const d=dot8(v,g);return v.map((x,i)=>x-2*d*g[i]);}));
+    this._weylProg=0;
+  }
+}
+
+// Kaprekar
+const KAP={
+  step(n){const d=String(n).padStart(4,'0').split('');return parseInt(d.slice().sort().reverse().join(''),10)-parseInt(d.slice().sort().join(''),10);},
+  seed(){let n;do{n=Math.floor(1000+Math.random()*9000);}while(new Set(String(n)).size===1);return n;}
+};
+
+// Precompute E8 adjacency list (pairs with dot product = −1)
+// 240 × 56 / 2 = 6720 edges
+function buildEdges(roots){
+  const pairs=[];
+  for(let i=0;i<roots.length;i++)for(let j=i+1;j<roots.length;j++)
+    if(Math.abs(dot8(roots[i],roots[j])+1)<.01)pairs.push(i,j);
+  return pairs;
+}
+
+/* ================================================================
+   AUDIO ENGINE — stereo · binaural · 8D HRTF orbit
+   ================================================================ */
+class AudioEngine{
+  constructor(){this.ctx=null;this.master=null;this.oscL=null;this.oscR=null;this.panner=null;this._hrtfTimer=null;this._hrtfAngle=0;}
+  _ctx(){if(!this.ctx)this.ctx=new(window.AudioContext||window.webkitAudioContext)();return this.ctx;}
+
+  play(freq,spatialMode){
+    const ctx=this._ctx();this.stop(true);const now=ctx.currentTime;
+    const m=ctx.createGain();m.gain.setValueAtTime(0,now);m.gain.linearRampToValueAtTime(.1,now+1.8);
+    this.master=m;
+
+    if(spatialMode==='hrtf'){
+      // PannerNode with HRTF model — uses listener's ear/head shape to simulate direction
+      const pan=ctx.createPanner();
+      pan.panningModel='HRTF';
+      pan.distanceModel='inverse';
+      pan.refDistance=1;pan.maxDistance=100;pan.rolloffFactor=1;
+      pan.coneInnerAngle=360;pan.coneOuterAngle=0;pan.coneOuterGain=0;
+      // Start directly in front
+      pan.positionX.setValueAtTime(0,now);pan.positionY.setValueAtTime(0,now);pan.positionZ.setValueAtTime(3,now);
+      // Set listener upright, looking forward
+      const L=ctx.listener;
+      if(L.positionX){L.positionX.value=0;L.positionY.value=0;L.positionZ.value=0;
+        L.forwardX.value=0;L.forwardY.value=0;L.forwardZ.value=-1;L.upX.value=0;L.upY.value=1;L.upZ.value=0;}
+      else{try{L.setPosition(0,0,0);L.setOrientation(0,0,-1,0,1,0);}catch(e){}}
+      m.connect(pan);pan.connect(ctx.destination);
+      this.panner=pan;this._hrtfAngle=0;
+      // Orbit animation — 50ms interval → ~20fps rotation
+      this._hrtfTimer=setInterval(()=>{
+        if(!this.panner||!this.ctx)return;
+        this._hrtfAngle+=.04;
+        const t=this.ctx.currentTime;
+        this.panner.positionX.setValueAtTime(Math.sin(this._hrtfAngle)*3,t);
+        this.panner.positionZ.setValueAtTime(Math.cos(this._hrtfAngle)*3,t);
+        this.panner.positionY.setValueAtTime(Math.sin(this._hrtfAngle*.5)*.5,t); // subtle vertical wobble
+      },50);
+      const o=ctx.createOscillator();o.type='sine';o.frequency.setValueAtTime(freq,now);o.connect(m);o.start(now);this.oscL=o;
+
+    }else if(spatialMode==='binaural'){
+      m.connect(ctx.destination);
+      const mk=(f,pan)=>{const o=ctx.createOscillator();o.type='sine';o.frequency.setValueAtTime(f,now);
+        if(ctx.createStereoPanner){const p=ctx.createStereoPanner();p.pan.setValueAtTime(pan,now);o.connect(p).connect(m);}else o.connect(m);
+        o.start(now);return o;};
+      this.oscL=mk(freq,-1);this.oscR=mk(freq+6,1);
+
+    }else{
+      // Stereo — simple centred oscillator
+      m.connect(ctx.destination);
+      const o=ctx.createOscillator();o.type='sine';o.frequency.setValueAtTime(freq,now);o.connect(m);o.start(now);this.oscL=o;
+    }
+  }
+
+  stop(fast){
+    if(this._hrtfTimer){clearInterval(this._hrtfTimer);this._hrtfTimer=null;}
+    if(!this.master)return;
+    const ctx=this.ctx,now=ctx.currentTime,fade=fast?.04:.7;
+    try{this.master.gain.cancelScheduledValues(now);this.master.gain.setValueAtTime(this.master.gain.value,now);this.master.gain.linearRampToValueAtTime(0,now+fade);}catch(e){}
+    const oL=this.oscL,oR=this.oscR,m=this.master;
+    setTimeout(()=>{try{oL&&oL.stop();}catch(e){}try{oR&&oR.stop();}catch(e){}try{m.disconnect();}catch(e){}},fade*1000+100);
+    this.oscL=null;this.oscR=null;this.master=null;this.panner=null;
+  }
+}
+const audio=new AudioEngine();
+const getSpatial=()=>document.getElementById('spatialMode').value;
+
+/* ================================================================
+   INIT MATH OBJECTS (runs synchronously after DOM ready)
+   ================================================================ */
+const e8=new E8Lattice();
+const proj=new Projector8D();
+const N_INT=112,N_HALF=128;
+
+/* ================================================================
+   THREE.JS SCENE
+   ================================================================ */
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(window.innerWidth,window.innerHeight);
+renderer.outputEncoding=THREE.sRGBEncoding;
+document.getElementById('container').appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0a0604);
+scene.fog=new THREE.FogExp2(0x0a0604,.0013);
+
+const camera=new THREE.PerspectiveCamera(55,window.innerWidth/window.innerHeight,1,3000);
+camera.position.set(0,0,490);
+
+// Lights
+scene.add(new THREE.AmbientLight(0x1a0806,2.5));
+const pL1=new THREE.PointLight(0xff6b35,4,1000);scene.add(pL1);
+const pL2=new THREE.PointLight(0xd4a017,2,700);pL2.position.set(200,180,60);scene.add(pL2);
+const pL3=new THREE.PointLight(0xb8390e,1.5,500);pL3.position.set(-150,-100,200);scene.add(pL3);
+
+/* ================================================================
+   ROOT GEOMETRY — InstancedMesh (gold=integer, ember=half-integer)
+   ================================================================ */
+const rootGeom=new THREE.SphereGeometry(2.7,10,10);
+const intMat=new THREE.MeshStandardMaterial({color:0xd4a017,emissive:0xd4a017,emissiveIntensity:1.4,roughness:.05,metalness:.9});
+const halfMat=new THREE.MeshStandardMaterial({color:0xff6b35,emissive:0xff6b35,emissiveIntensity:1.4,roughness:.05,metalness:.9});
+const intMesh=new THREE.InstancedMesh(rootGeom,intMat,N_INT);
+const halfMesh=new THREE.InstancedMesh(rootGeom,halfMat,N_HALF);
+intMesh.frustumCulled=halfMesh.frustumCulled=false;
+scene.add(intMesh);scene.add(halfMesh);
+
+// Glow overlay (BackSide larger sphere, additive blending)
+const glowG=new THREE.SphereGeometry(7,8,8);
+const iGlM=new THREE.MeshBasicMaterial({color:0xd4a017,transparent:true,opacity:.1,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.BackSide});
+const hGlM=new THREE.MeshBasicMaterial({color:0xff6b35,transparent:true,opacity:.1,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.BackSide});
+const iGlow=new THREE.InstancedMesh(glowG,iGlM,N_INT);
+const hGlow=new THREE.InstancedMesh(glowG,hGlM,N_HALF);
+iGlow.frustumCulled=hGlow.frustumCulled=false;
+scene.add(iGlow);scene.add(hGlow);
+
+const _dummy=new THREE.Object3D();
+const _pr=new Array(240); // projected root positions cache
+
+/* ================================================================
+   EDGE GEOMETRY — LineSegments connecting adjacent roots (dp=−1)
+   ================================================================ */
+// Heavy computation deferred to setTimeout after loading screen paints
+let edgePairs=null,edgePos=null,edgeGeom=null,edgeLines=null;
+function buildEdgeGeometry(){
+  edgePairs=buildEdges(e8.roots);
+  edgePos=new Float32Array(edgePairs.length*3);
+  edgeGeom=new THREE.BufferGeometry();
+  edgeGeom.setAttribute('position',new THREE.BufferAttribute(edgePos,3).setUsage(THREE.DynamicDrawUsage));
+  edgeLines=new THREE.LineSegments(edgeGeom,new THREE.LineBasicMaterial({
+    color:0xff6b35,transparent:true,opacity:.12,blending:THREE.AdditiveBlending,depthWrite:false
+  }));
+  edgeLines.frustumCulled=false;
+  scene.add(edgeLines);
+  document.getElementById('statEdges').textContent=edgePairs.length/2;
+}
+
+/* ================================================================
+   PARTICLE SYSTEM
+   ================================================================ */
+let NUM_P=600;
+let ppx,ppy,ppz,pvx,pvy,pvz,pph,pe8i;
+
+function allocP(n){
+  NUM_P=n;
+  ppx=new Float32Array(n);ppy=new Float32Array(n);ppz=new Float32Array(n);
+  pvx=new Float32Array(n);pvy=new Float32Array(n);pvz=new Float32Array(n);
+  pph=new Float32Array(n);pe8i=new Uint16Array(n);
+}
+function initP(){
+  for(let i=0;i<NUM_P;i++){
+    const a=(i/NUM_P)*Math.PI*2,r=100+Math.random()*200;
+    ppx[i]=Math.cos(a)*r;ppy[i]=Math.sin(a)*r;ppz[i]=(Math.random()-.5)*200;
+    pvx[i]=(Math.random()-.5)*2;pvy[i]=(Math.random()-.5)*2;pvz[i]=(Math.random()-.5)*2;
+    pph[i]=Math.random()*Math.PI*2;pe8i[i]=Math.floor(Math.random()*240);
+  }
+}
+
+function makeSpriteTex(){
+  const c=document.createElement('canvas');c.width=c.height=64;
+  const x=c.getContext('2d'),g=x.createRadialGradient(32,32,0,32,32,32);
+  g.addColorStop(0,'rgba(255,150,50,1)');g.addColorStop(.4,'rgba(255,100,30,.6)');g.addColorStop(1,'rgba(200,60,10,0)');
+  x.fillStyle=g;x.fillRect(0,0,64,64);return new THREE.CanvasTexture(c);
+}
+
+let pPA,pCA;
+const pGeom=new THREE.BufferGeometry();
+function rebuildParticleGeom(n){
+  pPA=new Float32Array(n*3);pCA=new Float32Array(n*3);
+  pGeom.setAttribute('position',new THREE.BufferAttribute(pPA,3).setUsage(THREE.DynamicDrawUsage));
+  pGeom.setAttribute('color',new THREE.BufferAttribute(pCA,3).setUsage(THREE.DynamicDrawUsage));
+  pGeom.setDrawRange(0,n);
+}
+rebuildParticleGeom(600);
+const pMesh=new THREE.Points(pGeom,new THREE.PointsMaterial({size:5,map:makeSpriteTex(),vertexColors:true,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));
+pMesh.frustumCulled=false;scene.add(pMesh);
+
+// Riemann sphere (shown in interference/hybrid mode)
+const rSph=new THREE.Mesh(
+  new THREE.SphereGeometry(225,26,16),
+  new THREE.MeshBasicMaterial({color:0xff6b35,wireframe:true,transparent:true,opacity:.055,blending:THREE.AdditiveBlending,depthWrite:false})
+);
+rSph.visible=false;scene.add(rSph);
+
+/* ================================================================
+   ORBIT CONTROLS (mouse + touch + pinch-zoom)
+   ================================================================ */
+class Orbit{
+  constructor(cam,el){
+    this.cam=cam;this.theta=.4;this.phi=Math.PI/3;this.r=490;
+    this.tgt=new THREE.Vector3();this._drag=false;this._lx=0;this._ly=0;this._pinch=0;
+    el.addEventListener('mousedown',e=>{this._drag=true;this._lx=e.clientX;this._ly=e.clientY;e.preventDefault();});
+    window.addEventListener('mouseup',()=>this._drag=false);
+    window.addEventListener('mousemove',e=>{if(!this._drag)return;
+      this.theta-=(e.clientX-this._lx)*.005;this.phi=Math.max(.08,Math.min(Math.PI-.08,this.phi+(e.clientY-this._ly)*.005));
+      this._lx=e.clientX;this._ly=e.clientY;});
+    el.addEventListener('wheel',e=>{this.r=Math.max(80,Math.min(2200,this.r+e.deltaY*.6));},{passive:true});
+    el.addEventListener('touchstart',e=>{
+      if(e.touches.length===1){this._drag=true;this._lx=e.touches[0].clientX;this._ly=e.touches[0].clientY;}
+      else if(e.touches.length===2)this._pinch=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+    },{passive:true});
+    window.addEventListener('touchend',()=>this._drag=false);
+    window.addEventListener('touchmove',e=>{
+      if(e.touches.length===1&&this._drag){
+        this.theta-=(e.touches[0].clientX-this._lx)*.007;this.phi=Math.max(.08,Math.min(Math.PI-.08,this.phi+(e.touches[0].clientY-this._ly)*.007));
+        this._lx=e.touches[0].clientX;this._ly=e.touches[0].clientY;
+      }else if(e.touches.length===2&&this._pinch>0){
+        const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+        this.r=Math.max(80,Math.min(2200,this.r*(this._pinch/d)));this._pinch=d;
+      }
+    },{passive:true});
+  }
+  update(){
+    const r=this.r,p=this.phi,t=this.theta;
+    this.cam.position.set(r*Math.sin(p)*Math.sin(t),r*Math.cos(p),r*Math.sin(p)*Math.cos(t));
+    this.cam.lookAt(this.tgt);
+  }
+}
+const orbit=new Orbit(camera,renderer.domElement);
+
+/* ================================================================
+   WEYL REFLECTION GESTURE (dbl-click / double-tap on root sphere)
+   ================================================================ */
+let weylOps=0;
+const ray=new THREE.Raycaster(),_m=new THREE.Vector2();
+function doWeyl(cx,cy){
+  _m.x=(cx/window.innerWidth)*2-1;_m.y=-(cy/window.innerHeight)*2+1;
+  ray.setFromCamera(_m,camera);
+  const hits=[...ray.intersectObject(intMesh),...ray.intersectObject(halfMesh)];
+  if(!hits.length)return;
+  const h=hits[0],ri=h.object===intMesh?h.instanceId:N_INT+h.instanceId;
+  proj.weylReflect(e8.roots[ri]);
+  document.getElementById('statWeyl').textContent=++weylOps;
+}
+renderer.domElement.addEventListener('dblclick',e=>doWeyl(e.clientX,e.clientY));
+let _lt=0;
+renderer.domElement.addEventListener('touchend',e=>{
+  const now=Date.now();if(now-_lt<310)doWeyl(e.changedTouches[0].clientX,e.changedTouches[0].clientY);_lt=now;
+},{passive:true});
+
+/* ================================================================
+   STATE
+   ================================================================ */
+const S={
+  mode:'superposition',am:'e8',
+  phase:0,na:0,qi:0,qj:0,qk:0,
+  q:new Quaternion(),assoc:0,
+  auto:false,autoA:0,collapsed:false
+};
+
+/* ================================================================
+   GEOMETRY UPDATES
+   ================================================================ */
+function updateRoots(now){
+  proj.update(S.phase,S.qi,S.qj,S.qk,S.na,now);
+  for(let i=0;i<240;i++)_pr[i]=proj.project(e8.roots[i]);
+  for(let i=0;i<N_INT;i++){const p=_pr[i];_dummy.position.set(p[0],p[1],p[2]);_dummy.updateMatrix();intMesh.setMatrixAt(i,_dummy.matrix);iGlow.setMatrixAt(i,_dummy.matrix);}
+  for(let i=0;i<N_HALF;i++){const p=_pr[N_INT+i];_dummy.position.set(p[0],p[1],p[2]);_dummy.updateMatrix();halfMesh.setMatrixAt(i,_dummy.matrix);hGlow.setMatrixAt(i,_dummy.matrix);}
+  intMesh.instanceMatrix.needsUpdate=halfMesh.instanceMatrix.needsUpdate=iGlow.instanceMatrix.needsUpdate=hGlow.instanceMatrix.needsUpdate=true;
+  if(edgePairs){
+    for(let e=0;e<edgePairs.length;e++){const p=_pr[edgePairs[e]];edgePos[e*3]=p[0];edgePos[e*3+1]=p[1];edgePos[e*3+2]=p[2];}
+    edgeGeom.attributes.position.needsUpdate=true;
+  }
+}
+
+function updateParticles(){
+  const lq=S.q,la=S.assoc,am=S.am,mode=S.mode;
+  for(let i=0;i<NUM_P;i++){
+    pph[i]+=.06;
+    if(am==='quaternion'||am==='hybrid'){const rv=lq.rotatePoint([pvx[i],pvy[i],pvz[i]]);pvx[i]+=(rv[0]-pvx[i])*.05;pvy[i]+=(rv[1]-pvy[i])*.05;pvz[i]+=(rv[2]-pvz[i])*.05;}
+    if(am==='e8'||am==='hybrid'){const pr=proj.project(e8.roots[pe8i[i]],1);pvx[i]+=pr[0]*.008;pvy[i]+=pr[1]*.008;pvz[i]+=pr[2]*.008;}
+    if(am==='octonion'||am==='hybrid'){const tw=la*S.na*.18,ang=pph[i]*3+i*.013;pvx[i]+=Math.cos(ang)*tw;pvy[i]+=Math.sin(ang)*tw;pvz[i]+=Math.sin(ang*1.3)*tw*.5;}
+    ppx[i]+=pvx[i];ppy[i]+=pvy[i];ppz[i]+=pvz[i];
+    const dist=Math.sqrt(ppx[i]*ppx[i]+ppy[i]*ppy[i]+ppz[i]*ppz[i]);
+    if(dist>340){if(mode==='tunneling'){ppx[i]*=-.9;ppy[i]*=-.9;ppz[i]*=-.9;}else{pvx[i]*=-.8;pvy[i]*=-.8;pvz[i]*=.95;}}
+    pvx[i]*=.99;pvy[i]*=.99;pvz[i]*=.99;
+    pPA[i*3]=ppx[i];pPA[i*3+1]=ppy[i];pPA[i*3+2]=ppz[i];
+    const ph=pph[i];
+    let r=.85+.12*Math.abs(Math.sin(ph*.7)),g=.26+.18*Math.abs(Math.sin(ph*1.1+1)),b=.07+.05*Math.abs(Math.sin(ph*1.7+2));
+    if(S.collapsed){r=Math.min(1,r*1.5);g*=.4;b*=.3;}
+    pCA[i*3]=r;pCA[i*3+1]=g;pCA[i*3+2]=b;
+  }
+  pGeom.attributes.position.needsUpdate=pGeom.attributes.color.needsUpdate=true;
+}
+
+/* ================================================================
+   FANO SIDEBAR (2D canvas)
+   ================================================================ */
+const fC=document.getElementById('fanoCanvas'),fX=fC.getContext('2d');
+const FCOLS=['#ff6b35','#ff9248','#ffb35a','#e8a33d','#d4831f','#c1440e','#b8390e'];
+function drawFano(quat){
+  const W=fC.width,H=fC.height,cx=W/2,cy=H/2,R=W*.34;
+  fX.clearRect(0,0,W,H);
+  const t=performance.now()*.00037;
+  // 7 point positions on circle, rotated by live quaternion
+  const pts=Array.from({length:7},(_,i)=>{
+    const a=(i/7)*Math.PI*2-Math.PI/2,base=[Math.cos(a)*R,Math.sin(a)*R,Math.sin(i*1.5+t)*R*.2];
+    const rp=quat.rotatePoint(base),persp=300/Math.max(50,300+rp[2]);
+    return[cx+rp[0]*persp,cy+rp[1]*persp,rp[2]];
+  });
+  // Draw 7 Fano lines (each connecting 3 of the 7 points)
+  fX.lineWidth=1.2;
+  FANO_LINES.forEach((line,idx)=>{
+    fX.strokeStyle=FCOLS[idx]+'55';fX.beginPath();
+    fX.moveTo(pts[line[0]][0],pts[line[0]][1]);fX.lineTo(pts[line[1]][0],pts[line[1]][1]);fX.lineTo(pts[line[2]][0],pts[line[2]][1]);
+    fX.closePath();fX.stroke();
+  });
+  // Draw 7 point nodes
+  pts.forEach((p,i)=>{
+    const gw=.5+.5*Math.max(0,(p[2]+R)/(2*R));
+    fX.beginPath();fX.fillStyle=`rgba(255,${150+Math.floor(gw*80)},${60+Math.floor(gw*60)},${.7+gw*.3})`;
+    fX.arc(p[0],p[1],3.4,0,Math.PI*2);fX.fill();
+    fX.fillStyle='rgba(242,230,216,.8)';fX.font='8.5px Courier New';
+    fX.fillText('e'+(i+1),p[0]+5,p[1]-4);
+  });
+}
+
+/* ================================================================
+   ANIMATION LOOP
+   ================================================================ */
+let fpsLast=performance.now(),fpsF=0;
+function animate(now){
+  requestAnimationFrame(animate);
+  if(++fpsF>20){document.getElementById('fps').textContent=Math.round(fpsF*1000/(now-fpsLast));fpsF=0;fpsLast=now;}
+  if(S.auto){
+    S.autoA+=.01;S.qi=Math.sin(S.autoA);S.qj=Math.cos(S.autoA*1.3);S.qk=Math.sin(S.autoA*.7);
+    document.getElementById('qi').value=S.qi;document.getElementById('qj').value=S.qj;document.getElementById('qk').value=S.qk;
+    document.getElementById('qiLabel').textContent=S.qi.toFixed(2);document.getElementById('qjLabel').textContent=S.qj.toFixed(2);document.getElementById('qkLabel').textContent=S.qk.toFixed(2);
+  }
+  S.q=new Quaternion(Math.cos(S.phase),S.qi*Math.sin(S.phase),S.qj*Math.sin(S.phase),S.qk*Math.sin(S.phase)).normalize();
+  S.assoc=computeLiveAssociator(S.qi,S.qj,S.qk);
+  updateRoots(now);
+  updateParticles();
+  // Pulse main light
+  if(_pr[0])pL1.position.set(_pr[0][0]*.25,_pr[0][1]*.25,_pr[0][2]*.25+80);
+  rSph.visible=S.mode==='interference'||S.am==='hybrid';
+  if(rSph.visible){rSph.rotation.y=now*.0003;rSph.rotation.x=now*.0002;}
+  orbit.update();
+  renderer.render(scene,camera);
+  drawFano(S.q);
+  document.getElementById('statQNorm').textContent=S.q.norm().toFixed(3);
+  document.getElementById('statAssoc').textContent=S.assoc.toFixed(3);
+}
+
+/* ================================================================
+   UI BINDINGS
+   ================================================================ */
+document.getElementById('toggleMenu').addEventListener('click',()=>document.getElementById('controls').classList.toggle('hidden'));
+window.addEventListener('resize',()=>{camera.aspect=window.innerWidth/window.innerHeight;camera.updateProjectionMatrix();renderer.setSize(window.innerWidth,window.innerHeight);});
+
+const AL={
+  quaternion:'Quaternion Algebra · 4D',
+  octonion:'Octonion · Fano Plane · 7D',
+  e8:'E8 Lie Algebra · 240 Roots',
+  hybrid:'Hybrid Algebra System'
+};
+const AI={
+  quaternion:'q = w + xi + yj + zk<br>i² = j² = k² = ijk = −1<br>Rotations via SO(3)',
+  octonion:'eₐ·e_b = e_c (Fano line)<br>Off-line triple: assoc ≠ 0<br>Non-associative division alg.',
+  e8:'240 roots · |r|² = 2 each<br>112 integer + 128 half-integer<br>6720 adjacent pairs (dp=−1)<br>|W(E8)| = 696,729,600',
+  hybrid:'ℍ ⊕ 𝕆 ⊕ E8 combined<br>Quaternion + Octonion + Lattice<br>Cross-plane coupling active'
+};
+
+document.getElementById('algebraMode').addEventListener('change',e=>{S.am=e.target.value;document.getElementById('indicator').textContent=AL[S.am];document.getElementById('algd').innerHTML=AI[S.am];});
+document.getElementById('mode').addEventListener('change',e=>S.mode=e.target.value);
+
+function bindSlider(id,key,labelId){
+  document.getElementById(id).addEventListener('input',e=>{S[key]=parseFloat(e.target.value);document.getElementById(labelId).textContent=parseFloat(e.target.value).toFixed(2);});
+}
+bindSlider('algebraPhase','phase','phaseLabel');
+bindSlider('qi','qi','qiLabel');
+bindSlider('qj','qj','qjLabel');
+bindSlider('qk','qk','qkLabel');
+bindSlider('nonAssoc','na','nonAssocLabel');
+
+document.getElementById('particleCount').addEventListener('input',e=>{
+  const n=parseInt(e.target.value,10);document.getElementById('particleCountLabel').textContent=n;document.getElementById('statParticles').textContent=n;
+  allocP(n);initP();rebuildParticleGeom(n);
+  pPA=pGeom.attributes.position.array;pCA=pGeom.attributes.color.array;
+});
+
+document.getElementById('collapse').addEventListener('click',()=>S.collapsed=!S.collapsed);
+
+document.getElementById('reset').addEventListener('click',()=>{
+  S.phase=0;S.qi=0;S.qj=0;S.qk=0;S.na=0;S.auto=false;S.collapsed=false;
+  proj.baseFrame=new Projector8D().baseFrame;proj._weylProg=1;
+  weylOps=0;document.getElementById('statWeyl').textContent=0;
+  initP();
+  ['algebraPhase','qi','qj','qk','nonAssoc'].forEach(id=>document.getElementById(id).value=0);
+  ['phaseLabel','qiLabel','qjLabel','qkLabel','nonAssocLabel'].forEach(id=>document.getElementById(id).textContent='0.00');
+});
+
+document.getElementById('autoRotate').addEventListener('click',()=>S.auto=!S.auto);
+
+document.getElementById('randomize').addEventListener('click',()=>{
+  S.qi=Math.random()*2-1;S.qj=Math.random()*2-1;S.qk=Math.random()*2-1;S.phase=Math.random()*6.28;S.na=Math.random();
+  document.getElementById('qi').value=S.qi;document.getElementById('qj').value=S.qj;document.getElementById('qk').value=S.qk;
+  document.getElementById('algebraPhase').value=S.phase;document.getElementById('nonAssoc').value=S.na;
+  document.getElementById('qiLabel').textContent=S.qi.toFixed(2);document.getElementById('qjLabel').textContent=S.qj.toFixed(2);
+  document.getElementById('qkLabel').textContent=S.qk.toFixed(2);document.getElementById('phaseLabel').textContent=S.phase.toFixed(2);
+  document.getElementById('nonAssocLabel').textContent=S.na.toFixed(2);
+});
+
+document.getElementById('tone432').addEventListener('click',()=>audio.play(432,getSpatial()));
+document.getElementById('tone528').addEventListener('click',()=>audio.play(528,getSpatial()));
+document.getElementById('tone261').addEventListener('click',()=>audio.play(261.63,getSpatial())); // Middle C
+document.getElementById('tone146').addEventListener('click',()=>audio.play(146.83,getSpatial())); // D3
+document.getElementById('toneStop').addEventListener('click',()=>audio.stop(false));
+
+/* ================================================================
+   INIT SEQUENCE
+   ================================================================ */
+allocP(600);initP();
+document.getElementById('statRoots').textContent=e8.roots.length;
+
+// Pre-populate _pr so nothing is undefined on first frame
+proj.update(0,0,0,0,0,0);
+for(let i=0;i<240;i++)_pr[i]=proj.project(e8.roots[i]);
+
+// Defer heavy edge computation to allow loading screen to paint
+setTimeout(()=>{
+  buildEdgeGeometry();
+  document.getElementById('loading').style.display='none';
+  requestAnimationFrame(animate);
+},80);
+</script>
+</body>
+</html>
